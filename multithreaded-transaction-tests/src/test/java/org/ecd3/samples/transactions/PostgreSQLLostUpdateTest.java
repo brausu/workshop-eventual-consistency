@@ -34,7 +34,7 @@ import org.testcontainers.utility.DockerImageName;
  *
  * You need to set a timeout parameter of MultiThreadedTC: <code>-Dtunit.runLimit=20</code> to successfully execute
  * this test. This test might run for several minutes until it fails either because the test assertion fails, or
- * because of a non-serializable access exception. Therefore, you have to enable it manually.
+ * because of a non-serializable access exception. Therefore, you have to enable it manually (it is currently disabled).
  *
  * Note: You need to have docker installed on your machine: https://docs.docker.com/get-docker/
  */

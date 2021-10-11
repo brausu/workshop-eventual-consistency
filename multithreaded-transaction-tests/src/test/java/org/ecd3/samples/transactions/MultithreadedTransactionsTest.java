@@ -29,6 +29,8 @@ import org.testcontainers.utility.DockerImageName;
  * The framework MultiThreadedTC will run these transactions in 1000 different interleavings thereby
  * pointing out potential concurrency anomalies or deadlocks.
  *
+ * As this test is only a template, it is currently disabled.
+ *
  * Note: You need to have docker installed on your machine: https://docs.docker.com/get-docker/
  */
 @Disabled
