@@ -1,4 +1,4 @@
-package org.ecd3.samples;
+package org.ecd3.samples.transactions;
 
 
 import com.zaxxer.hikari.HikariConfig;

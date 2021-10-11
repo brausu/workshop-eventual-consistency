@@ -1,4 +1,4 @@
-package org.ecd3.samples;
+package org.ecd3.samples.transactions;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
@@ -16,51 +16,51 @@ import java.sql.SQLException;
 import javax.sql.DataSource;
 import org.apache.ibatis.jdbc.ScriptRunner;
 import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.containers.output.Slf4jLogConsumer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 /**
- * Runs two concurrent withdraw transactions in 1000 different interleavings against a PostgreSQL database.
+ * Runs two concurrent withdraw transactions in 1000 different interleavings against a MySQL database.
  * Use the private field <code>ISOLATION_LEVEL_UNDER_TEST</code> to configure the isolation level to use.
  *
- * At the end of each run it is verified whether the current balance value reflects both withdraw operations.
- *
- * You need to set a timeout parameter of MultiThreadedTC: <code>-Dtunit.runLimit=20</code> to successfully execute
- * this test. This test might run for several minutes until it fails either because the test assertion fails, or
- * because of a non-serializable access exception. Therefore, you have to enable it manually.
+ * At the end of each run it is verified whether the current balance value reflects both withdraw operations. This test
+ * fails either because of a lost update (corresponding test assertion fails), or because of a deadlock. The type
+ * of the failure depends on the configured isolation level.
  *
  * Note: You need to have docker installed on your machine: https://docs.docker.com/get-docker/
  */
-@Disabled
 @Testcontainers
-public class PostgreSQLLostUpdateTest extends MultithreadedTestCase {
+public class MySQLLostUpdateTest extends MultithreadedTestCase {
 
-  private static final Logger logger = LoggerFactory.getLogger(PostgreSQLLostUpdateTest.class);
 
-//  private static final int ISOLATION_LEVEL_UNDER_TEST = Connection.TRANSACTION_READ_UNCOMMITTED;
+  private static final Logger logger = LoggerFactory.getLogger(MySQLLostUpdateTest.class);
+
+  private static final int ISOLATION_LEVEL_UNDER_TEST = Connection.TRANSACTION_READ_UNCOMMITTED;
 
 //  private static final int ISOLATION_LEVEL_UNDER_TEST = Connection.TRANSACTION_READ_COMMITTED;
 
-  private static final int ISOLATION_LEVEL_UNDER_TEST = Connection.TRANSACTION_REPEATABLE_READ;
+//  private static final int ISOLATION_LEVEL_UNDER_TEST = Connection.TRANSACTION_REPEATABLE_READ;
 
 //  private static final int ISOLATION_LEVEL_UNDER_TEST = Connection.TRANSACTION_SERIALIZABLE;
 
+  private static final String mySQLVersion = "mysql:8.0.24";
+
+//  private static final String mySQLVersion = "mysql:5.7.34";
 
   @Container
-  private static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>(DockerImageName.parse("postgres:9.6.12"))
+  private static final MySQLContainer<?> mysqlContainer = new MySQLContainer<>(DockerImageName.parse(mySQLVersion))
       .withDatabaseName("suits_accounts")
       .withUsername("root")
       .withPassword("")
       .withLogConsumer(new Slf4jLogConsumer(logger));
 
-  private static final String DB_INIT_SCRIPT = "/postgresql_init.sql";
+  private static final String DB_INIT_SCRIPT = "/mysql_init.sql";
 
   private DataSource db;
 
@@ -87,18 +87,24 @@ public class PostgreSQLLostUpdateTest extends MultithreadedTestCase {
     // thread 2 will withdraw $ 3_000_000
     // thus, the balance is expected to be $ 10_000_000.98 after both transactions complete
 
-    Double balance = getCurrentBalance();
+    Double balance = getCurrentBalance(ACCOUNT_ID);
     Assertions.assertEquals(10_000_000.98, balance);
+
     ((HikariDataSource) this.db).close();
   }
 
   @Test
   public void testConcurrentTransactionCommits() throws Throwable {
-    TestFramework.runManyTimes(new PostgreSQLLostUpdateTest(), 1000);
+    TestFramework.runManyTimes(new MySQLLostUpdateTest(), 1000);
   }
 
 
-
+  /**
+   * The withdraw transaction
+   * @param accountId ID of the account to draw money from
+   * @param amount The amount to whitdraw
+   * @throws SQLException transaction might be rolled back due to deadlocks or non-serializability.
+   */
   private void withdraw(String accountId, Double amount) throws SQLException {
     Connection connection = null;
     PreparedStatement update = null;
@@ -130,14 +136,19 @@ public class PostgreSQLLostUpdateTest extends MultithreadedTestCase {
     }
   }
 
-  private Double getCurrentBalance() {
+  /**
+   * Retrieves the current balance of an account from the database.
+   * @param accountId The ID of the account
+   * @return The current balance of the account.
+   */
+  private Double getCurrentBalance(String accountId) {
     Double balance = null;
     Connection connection = null;
     try {
 
       connection = db.getConnection();
       connection.setTransactionIsolation(ISOLATION_LEVEL_UNDER_TEST);
-      balance = queryCurrentBalance(connection, ACCOUNT_ID);
+      balance = queryCurrentBalance(connection, accountId);
 
     } catch (SQLException throwables) {
       logger.error("Couldn't get db connection", throwables);
@@ -155,10 +166,17 @@ public class PostgreSQLLostUpdateTest extends MultithreadedTestCase {
     return balance;
   }
 
+  /**
+   * Queries the current balance of an account in the context of a running transaction.
+   * @param connection the connection / transaction scope
+   * @param accountId The ID of the account
+   * @return the current balance of the account
+   */
   private Double queryCurrentBalance(Connection connection, String accountId) throws SQLException {
     PreparedStatement query = null;
     ResultSet resultSet = null;
     try {
+
       query = connection.prepareStatement("SELECT balance FROM accounts WHERE id = ?");
       query.setString(1, accountId);
       resultSet = query.executeQuery();
@@ -166,6 +184,7 @@ public class PostgreSQLLostUpdateTest extends MultithreadedTestCase {
       Double balance = resultSet.getDouble(1);
 
       return balance;
+
     } finally {
       if(resultSet != null) {
         resultSet.close();
@@ -176,11 +195,13 @@ public class PostgreSQLLostUpdateTest extends MultithreadedTestCase {
     }
   }
 
+  /**
+   * Creates the database schema and populates database tables with test data.
+   */
   private void initializeDatabaseContents() {
     Connection connection = null;
     InputStream scriptStream = null;
     Reader reader = null;
-
     try {
 
       // run the database schema initialization script and populate database tables.
@@ -188,7 +209,6 @@ public class PostgreSQLLostUpdateTest extends MultithreadedTestCase {
       scriptStream = this.getClass().getResourceAsStream(DB_INIT_SCRIPT);
       reader = new BufferedReader(new InputStreamReader(scriptStream));
       ScriptRunner sr = new ScriptRunner(connection);
-      sr.setAutoCommit(true);
       sr.runScript(reader);
 
     } catch (SQLException throwables) {
@@ -219,12 +239,15 @@ public class PostgreSQLLostUpdateTest extends MultithreadedTestCase {
     }
   }
 
+  /**
+   * Initializes the datasource and the connection pool.
+   */
   private void initializeDataSource() {
     HikariConfig hikariConfig = new HikariConfig();
-    hikariConfig.setJdbcUrl(postgreSQLContainer.getJdbcUrl());
-    hikariConfig.setUsername(postgreSQLContainer.getUsername());
-    hikariConfig.setPassword(postgreSQLContainer.getPassword());
-    hikariConfig.setDriverClassName(postgreSQLContainer.getDriverClassName());
+    hikariConfig.setJdbcUrl(mysqlContainer.getJdbcUrl());
+    hikariConfig.setUsername(mysqlContainer.getUsername());
+    hikariConfig.setPassword(mysqlContainer.getPassword());
+    hikariConfig.setDriverClassName(mysqlContainer.getDriverClassName());
     this.db = new HikariDataSource(hikariConfig);
   }
 
